@@ -34,37 +34,57 @@ jobs:
 
     # 唯一的构建步骤：Linux ARM64
     - name: Build (Linux/ARM64)
-      # if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'linux-arm64' }} # 如果不使用 matrix，此条件可以移除
       run: |
         sudo apt update
-        # 确保安装了所有必要的交叉编译工具和目标libc的开发文件
-        sudo apt install -y clang lld g++-aarch64-linux-gnu gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross
+        sudo apt install -y clang lld g++-aarch64-linux-gnu gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross cmake libarchive-tools # cmake 和 bsdtar (libarchive-tools) 是为了调试
 
         export TARGET_SYSROOT=/usr/aarch64-linux-gnu
 
-        # 调试步骤：检查 libc 相关文件的位置和内容 (如果编译成功，后续可以移除)
-        echo "--- Debug: Listing libc files in sysroot ---"
-        ls -l ${TARGET_SYSROOT}/lib/libc.so* || echo "libc.so* not found in ${TARGET_SYSROOT}/lib/"
+        echo "--- Debug: TARGET_SYSROOT listing ---"
+        ls -la ${TARGET_SYSROOT}/
+        echo "--- Debug: TARGET_SYSROOT/lib listing ---"
+        ls -la ${TARGET_SYSROOT}/lib/
+        echo "--- Debug: TARGET_SYSROOT/lib/aarch64-linux-gnu listing (if exists) ---"
+        ls -la ${TARGET_SYSROOT}/lib/aarch64-linux-gnu/ 2>/dev/null || echo "${TARGET_SYSROOT}/lib/aarch64-linux-gnu/ not found"
+        
+        echo "--- Debug: libc.so details ---"
         if [ -f ${TARGET_SYSROOT}/lib/libc.so ]; then
-          echo "--- Debug: Contents of ${TARGET_SYSROOT}/lib/libc.so ---"
+          echo "Contents of ${TARGET_SYSROOT}/lib/libc.so:"
           cat ${TARGET_SYSROOT}/lib/libc.so
+          echo "Stat for ${TARGET_SYSROOT}/lib/libc.so:"
+          stat ${TARGET_SYSROOT}/lib/libc.so
+        else
+          echo "${TARGET_SYSROOT}/lib/libc.so not found"
         fi
-        echo "--- Debug: Listing actual libc.so.6 symlink target if possible ---"
-        ls -l $(readlink -f ${TARGET_SYSROOT}/lib/libc.so.6 2>/dev/null) 2>/dev/null || echo "Could not determine target of ${TARGET_SYSROOT}/lib/libc.so.6"
-        echo "--- Debug: Checking alternative common locations for libc.so.6 ---"
-        ls -l /lib/aarch64-linux-gnu/libc.so.6 2>/dev/null || echo "/lib/aarch64-linux-gnu/libc.so.6 not found"
-        ls -l ${TARGET_SYSROOT}/lib/aarch64-linux-gnu/libc.so.6 2>/dev/null || echo "${TARGET_SYSROOT}/lib/aarch64-linux-gnu/libc.so.6 not found"
+
+        echo "--- Debug: libc.so.6 details ---"
+        if [ -e ${TARGET_SYSROOT}/lib/libc.so.6 ]; then # Use -e to check for existence (file or symlink)
+          echo "Stat for ${TARGET_SYSROOT}/lib/libc.so.6:"
+          stat ${TARGET_SYSROOT}/lib/libc.so.6
+          echo "readlink -f for ${TARGET_SYSROOT}/lib/libc.so.6:"
+          readlink -f ${TARGET_SYSROOT}/lib/libc.so.6
+          echo "Listing target of readlink -f:"
+          ls -l $(readlink -f ${TARGET_SYSROOT}/lib/libc.so.6)
+        else
+          echo "${TARGET_SYSROOT}/lib/libc.so.6 does not exist"
+        fi
+        
+        echo "--- Debug: ld.lld version ---"
+        ld.lld --version
+        echo "--- Debug: clang version ---"
+        clang --version
+        echo "--- Debug: aarch64-linux-gnu-gcc version ---"
+        aarch64-linux-gnu-gcc --version
         echo "--- End Debug ---"
 
-        # 创建 clang/clang++ 的 shim 脚本，并加入 --sysroot 参数
+        # 创建 clang/clang++ 的 shim 脚本
         echo '#!/bin/sh' | sudo tee /usr/local/bin/aarch64-linux-gnu-clang
         echo "clang --target=aarch64-linux-gnu --sysroot=${TARGET_SYSROOT} -fuse-ld=lld \"\$@\"" | sudo tee -a /usr/local/bin/aarch64-linux-gnu-clang
         echo '#!/bin/sh' | sudo tee /usr/local/bin/aarch64-linux-gnu-clang++
         echo "clang++ --target=aarch64-linux-gnu --sysroot=${TARGET_SYSROOT} -fuse-ld=lld \"\$@\"" | sudo tee -a /usr/local/bin/aarch64-linux-gnu-clang++
         sudo chmod +x /usr/local/bin/aarch64-linux-gnu-clang /usr/local/bin/aarch64-linux-gnu-clang++
 
-        # 为 CMake 设置 LDFLAGS 和 CMAKE_FIND_ROOT_PATH 相关变量
-        export LDFLAGS="--sysroot=${TARGET_SYSROOT} -L${TARGET_SYSROOT}/lib -L${TARGET_SYSROOT}/usr/lib"
+        export LDFLAGS="--sysroot=${TARGET_SYSROOT}" # 简化 LDFLAGS，让 --sysroot 发挥主要作用
         export CMAKE_SYSROOT="${TARGET_SYSROOT}"
         export CMAKE_FIND_ROOT_PATH="${TARGET_SYSROOT}"
         export CMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER
@@ -72,7 +92,6 @@ jobs:
         export CMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
         export CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY
 
-        # lzham 相关修复 (如果需要)
         if [ -f Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h ]; then
           sed -i -e 's/\&\& LZHAM_PLATFORM_PC/\&\& LZHAM_PLATFORM_PC \&\& !defined(__aarch64__)/' Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h
         fi
@@ -82,7 +101,13 @@ jobs:
         export FLAGS="CROSS_COMPILE=aarch64-linux-gnu-"
         export CFLAGS_ADDITIONAL="-march=armv8-a -Wno-error -Wno-unused-command-line-argument"
         
-        ./build_linux.sh
+        # 尝试执行构建，如果失败，后续可以添加步骤来获取 CMake 的详细错误日志
+        ./build_linux.sh || ( \
+          echo "Build failed. Trying to capture CMake error logs." && \
+          find . -name "CMakeError.log" -exec echo "--- Contents of {} ---" \; -exec cat {} \; && \
+          find . -name "CMakeOutput.log" -exec echo "--- Contents of {} ---" \; -exec cat {} \; && \
+          exit 1 \
+        )
 
     # 唯一的上传步骤：Linux ARM64 产物
     - name: Upload (Linux/ARM64)
