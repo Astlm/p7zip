@@ -96,21 +96,32 @@ jobs:
       if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'linux-arm64' }}
       run: |
         sudo apt update
-        sudo apt install -y clang lld gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu # 安装 Clang, LLD 和 AArch64 GCC 工具链
+        # 确保为目标体系结构安装了 g++, gcc, binutils, clang, lld
+        sudo apt install -y clang lld g++-aarch64-linux-gnu gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
-        # 为 clang 创建 shim 脚本
+        # 定义目标体系结构的 sysroot 路径
+        export TARGET_SYSROOT=/usr/aarch64-linux-gnu
+
+        # 创建 clang/clang++ 的 shim 脚本，并加入 --sysroot 参数
+        # 这会引导 clang 正确地找到目标体系结构的头文件和库
         echo '#!/bin/sh' | sudo tee /usr/local/bin/aarch64-linux-gnu-clang
-        echo 'clang --target=aarch64-linux-gnu -fuse-ld=lld "$@"' | sudo tee -a /usr/local/bin/aarch64-linux-gnu-clang
+        echo "clang --target=aarch64-linux-gnu --sysroot=${TARGET_SYSROOT} -fuse-ld=lld \"\$@\"" | sudo tee -a /usr/local/bin/aarch64-linux-gnu-clang
         echo '#!/bin/sh' | sudo tee /usr/local/bin/aarch64-linux-gnu-clang++
-        echo 'clang++ --target=aarch64-linux-gnu -fuse-ld=lld "$@"' | sudo tee -a /usr/local/bin/aarch64-linux-gnu-clang++
+        echo "clang++ --target=aarch64-linux-gnu --sysroot=${TARGET_SYSROOT} -fuse-ld=lld \"\$@\"" | sudo tee -a /usr/local/bin/aarch64-linux-gnu-clang++
         sudo chmod +x /usr/local/bin/aarch64-linux-gnu-clang /usr/local/bin/aarch64-linux-gnu-clang++
 
-        sed -i -e 's/\&\& LZHAM_PLATFORM_PC/\&\& LZHAM_PLATFORM_PC \&\& !defined(__aarch64__)/' Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h || true
+        # lzham 相关修复 (如果需要)
+        # 确保路径 Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h 是正确的
+        if [ -f Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h ]; then
+          sed -i -e 's/\&\& LZHAM_PLATFORM_PC/\&\& LZHAM_PLATFORM_PC \&\& !defined(__aarch64__)/' Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h
+        fi
 
         export CMPL=cmpl_clang_arm64
         export OUTDIR=linux_arm64_clang
         export FLAGS="CROSS_COMPILE=aarch64-linux-gnu-"
-        export CFLAGS_ADDITIONAL="-march=armv8-a -Wno-error"
+        # CFLAGS_ADDITIONAL 会被追加到 Makefile 中的 CFLAGS
+        # 通常 CXXFLAGS 也会使用类似的方式或直接使用 CFLAGS_ADDITIONAL 的值
+        export CFLAGS_ADDITIONAL="-march=armv8-a -Wno-error -Wno-unused-command-line-argument" # 添加 -Wno-unused-command-line-argument 以抑制 -fuse-ld=lld 的警告
         ./build_linux.sh
     - name: Build (macOS)
       if: ${{ startsWith(matrix.os, 'macos-') }} # 适用于所有 macOS 版本
