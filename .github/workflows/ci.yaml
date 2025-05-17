@@ -96,22 +96,43 @@ jobs:
       if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'linux-arm64' }}
       run: |
         sudo apt update
-        # 确保为目标体系结构安装了 g++, gcc, binutils, clang, lld
-        sudo apt install -y clang lld g++-aarch64-linux-gnu gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+        # 确保安装了所有必要的交叉编译工具和目标libc的开发文件
+        sudo apt install -y clang lld g++-aarch64-linux-gnu gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross
 
-        # 定义目标体系结构的 sysroot 路径
         export TARGET_SYSROOT=/usr/aarch64-linux-gnu
 
+        # 调试步骤：检查 libc 相关文件的位置和内容
+        echo "--- Debug: Listing libc files in sysroot ---"
+        ls -l ${TARGET_SYSROOT}/lib/libc.so* || echo "libc.so* not found in ${TARGET_SYSROOT}/lib/"
+        if [ -f ${TARGET_SYSROOT}/lib/libc.so ]; then
+          echo "--- Debug: Contents of ${TARGET_SYSROOT}/lib/libc.so ---"
+          cat ${TARGET_SYSROOT}/lib/libc.so
+        fi
+        echo "--- Debug: Listing actual libc.so.6 symlink target if possible ---"
+        ls -l $(readlink -f ${TARGET_SYSROOT}/lib/libc.so.6 2>/dev/null) 2>/dev/null || echo "Could not determine target of ${TARGET_SYSROOT}/lib/libc.so.6"
+        echo "--- Debug: Checking alternative common locations for libc.so.6 ---"
+        ls -l /lib/aarch64-linux-gnu/libc.so.6 2>/dev/null || echo "/lib/aarch64-linux-gnu/libc.so.6 not found"
+        ls -l ${TARGET_SYSROOT}/lib/aarch64-linux-gnu/libc.so.6 2>/dev/null || echo "${TARGET_SYSROOT}/lib/aarch64-linux-gnu/libc.so.6 not found"
+        echo "--- End Debug ---"
+
         # 创建 clang/clang++ 的 shim 脚本，并加入 --sysroot 参数
-        # 这会引导 clang 正确地找到目标体系结构的头文件和库
         echo '#!/bin/sh' | sudo tee /usr/local/bin/aarch64-linux-gnu-clang
         echo "clang --target=aarch64-linux-gnu --sysroot=${TARGET_SYSROOT} -fuse-ld=lld \"\$@\"" | sudo tee -a /usr/local/bin/aarch64-linux-gnu-clang
         echo '#!/bin/sh' | sudo tee /usr/local/bin/aarch64-linux-gnu-clang++
         echo "clang++ --target=aarch64-linux-gnu --sysroot=${TARGET_SYSROOT} -fuse-ld=lld \"\$@\"" | sudo tee -a /usr/local/bin/aarch64-linux-gnu-clang++
         sudo chmod +x /usr/local/bin/aarch64-linux-gnu-clang /usr/local/bin/aarch64-linux-gnu-clang++
 
+        # 为 CMake 设置 LDFLAGS 和 CMAKE_FIND_ROOT_PATH 相关变量
+        # 这有助于 CMake 正确处理交叉编译环境
+        export LDFLAGS="--sysroot=${TARGET_SYSROOT} -L${TARGET_SYSROOT}/lib -L${TARGET_SYSROOT}/usr/lib"
+        export CMAKE_SYSROOT="${TARGET_SYSROOT}"
+        export CMAKE_FIND_ROOT_PATH="${TARGET_SYSROOT}"
+        export CMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER
+        export CMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY
+        export CMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
+        export CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY
+
         # lzham 相关修复 (如果需要)
-        # 确保路径 Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h 是正确的
         if [ -f Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h ]; then
           sed -i -e 's/\&\& LZHAM_PLATFORM_PC/\&\& LZHAM_PLATFORM_PC \&\& !defined(__aarch64__)/' Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h
         fi
@@ -119,9 +140,11 @@ jobs:
         export CMPL=cmpl_clang_arm64
         export OUTDIR=linux_arm64_clang
         export FLAGS="CROSS_COMPILE=aarch64-linux-gnu-"
-        # CFLAGS_ADDITIONAL 会被追加到 Makefile 中的 CFLAGS
-        # 通常 CXXFLAGS 也会使用类似的方式或直接使用 CFLAGS_ADDITIONAL 的值
-        export CFLAGS_ADDITIONAL="-march=armv8-a -Wno-error -Wno-unused-command-line-argument" # 添加 -Wno-unused-command-line-argument 以抑制 -fuse-ld=lld 的警告
+        export CFLAGS_ADDITIONAL="-march=armv8-a -Wno-error -Wno-unused-command-line-argument"
+        # 对于 CMake 子项目，CC 和 CXX 环境变量应由 shim 脚本覆盖。
+        # LDFLAGS 和 CFLAGS_ADDITIONAL 也可能被传递给 CMake。
+        # CMAKE_SYSROOT 等变量会直接影响 CMake 的行为。
+
         ./build_linux.sh
     - name: Build (macOS)
       if: ${{ startsWith(matrix.os, 'macos-') }} # 适用于所有 macOS 版本
