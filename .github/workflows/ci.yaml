@@ -6,94 +6,35 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-22.04 # 更新版本
-            mode: "gcc-x64"
-          - os: ubuntu-22.04 # 更新版本
-            mode: "gcc-x86"
-          - os: ubuntu-22.04 # 更新版本
-            mode: "clang"
-          - os: ubuntu-22.04 # 更新版本
-            mode: "android-aarch64"
-          - os: ubuntu-22.04 # 新增：Linux ARM64 支持，更新版本
-            mode: "linux-arm64"
-          - os: ubuntu-22.04 # 更新版本
-            mode: "win64"
-          - os: ubuntu-22.04 # 更新版本
-            mode: "win32"
-          - os: macos-13 # macOS 版本可以根据实际情况选择最新的稳定版，例如 macos-latest 或特定版本
+    # 由于现在只有一个构建配置，runs-on 可以直接指定，或者继续使用 matrix (虽然只有一个条目)
+    runs-on: ubuntu-22.04 # 直接指定操作系统
+    # 或者，如果您想保留 matrix 结构（即使只有一个配置）：
+    # runs-on: ${{ matrix.os }}
+    # strategy:
+    #   matrix:
+    #     include:
+    #       - os: ubuntu-22.04
+    #         mode: "linux-arm64"
 
     steps:
-    - uses: actions/checkout@v4 # 建议更新到较新版本的 checkout action
+    - uses: actions/checkout@v4
     - name: Checkout submodule
       run: |
         git submodule init
         git submodule update
+
+    # UASM 设置 (Linux)。由于我们只在 Ubuntu 上构建，此步骤保留。
+    # 尽管 UASM 主要用于 x86 汇编，但保留它以防万一 p7zip 的构建过程间接使用，且它无害。
     - name: Set up UASM (Linux)
-      if: ${{ startsWith(matrix.os, 'ubuntu-') }} # 适用于所有 ubuntu 版本
+      # if: ${{ startsWith(matrix.os, 'ubuntu-') }} # 如果不使用 matrix，此条件可以直接移除或设为 true
       run: |
         curl -L https://github.com/Terraspace/UASM/archive/refs/tags/v2.55.tar.gz | tar xz
         make -C UASM-2.55 -f gccLinux64.mak
         sudo cp UASM-2.55/GccUnixR/uasm /usr/local/bin/
-    - name: Set up UASM (macOS)
-      if: ${{ startsWith(matrix.os, 'macos-') }} # 适用于所有 macOS 版本
-      run: |
-        curl -L https://github.com/Terraspace/UASM/archive/refs/tags/v2.55.tar.gz | tar xz
-        # Apple clang 12+ requires "-Wno-error=implicit-function-declaration" cf https://forum.mmm.ucar.edu/phpBB3/viewtopic.php?t=11087&p=24226
-        sed -i -e 's/-ansi/-Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types/' UASM-2.55/ClangOSX64.mak
-        make -C UASM-2.55 -f ClangOSX64.mak CC=clang
-        sudo cp UASM-2.55/GccUnixR/uasm /usr/local/bin/
-    - name: Build (Linux/GCC-x64)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'gcc-x64' }}
-      run: |
-        export CMPL=cmpl_gcc_x64
-        export OUTDIR=g_x64
-        export FLAGS=""
-        export CFLAGS_ADDITIONAL=""
-        ./build_linux.sh
-    - name: Build (Linux/GCC-x86)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'gcc-x86' }}
-      run: |
-        sudo apt update
-        sudo apt install g++-multilib gcc-multilib -y # 确保安装了 gcc-multilib
-        echo 'gcc -m32 "$@"' | sudo tee /usr/local/bin/i686-linux-gnu-gcc
-        echo 'g++ -m32 "$@"' | sudo tee /usr/local/bin/i686-linux-gnu-g++
-        sudo chmod 755 /usr/local/bin/i686-linux-gnu-gcc /usr/local/bin/i686-linux-gnu-g++
 
-        export CMPL=cmpl_gcc_x86
-        export OUTDIR=g_x86
-        export FLAGS="CROSS_COMPILE=i686-linux-gnu-"
-        export CFLAGS_ADDITIONAL=""
-        ./build_linux.sh
-    - name: Build (Linux/Clang)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'clang' }}
-      run: |
-        export CMPL=cmpl_clang_x64
-        export OUTDIR=c_x64
-        export FLAGS=""
-        export CFLAGS_ADDITIONAL=""
-        ./build_linux.sh
-    - name: Build (Linux/android-aarch64)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'android-aarch64' }}
-      run: |
-        sed -i -e 's/\&\& LZHAM_PLATFORM_PC/\&\& LZHAM_PLATFORM_PC \&\& !defined(__aarch64__)/' Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h || true
-
-        export TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
-        export TARGET=aarch64-linux-android
-        export API=21 # 根据需要调整 API Level
-        export PATH=$PATH:$TOOLCHAIN/bin
-
-        export CMPL=cmpl_clang_arm64
-        export OUTDIR=c_arm64_android # 更改目录名以区分
-        export FLAGS="CROSS_COMPILE=${TARGET}${API}-"
-        export CFLAGS_ADDITIONAL="-march=armv8-a+crypto -Wno-error"
-        ./build_linux.sh
-    # 新增：Build (Linux/ARM64)
+    # 唯一的构建步骤：Linux ARM64
     - name: Build (Linux/ARM64)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'linux-arm64' }}
+      # if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'linux-arm64' }} # 如果不使用 matrix，此条件可以移除
       run: |
         sudo apt update
         # 确保安装了所有必要的交叉编译工具和目标libc的开发文件
@@ -101,7 +42,7 @@ jobs:
 
         export TARGET_SYSROOT=/usr/aarch64-linux-gnu
 
-        # 调试步骤：检查 libc 相关文件的位置和内容
+        # 调试步骤：检查 libc 相关文件的位置和内容 (如果编译成功，后续可以移除)
         echo "--- Debug: Listing libc files in sysroot ---"
         ls -l ${TARGET_SYSROOT}/lib/libc.so* || echo "libc.so* not found in ${TARGET_SYSROOT}/lib/"
         if [ -f ${TARGET_SYSROOT}/lib/libc.so ]; then
@@ -123,7 +64,6 @@ jobs:
         sudo chmod +x /usr/local/bin/aarch64-linux-gnu-clang /usr/local/bin/aarch64-linux-gnu-clang++
 
         # 为 CMake 设置 LDFLAGS 和 CMAKE_FIND_ROOT_PATH 相关变量
-        # 这有助于 CMake 正确处理交叉编译环境
         export LDFLAGS="--sysroot=${TARGET_SYSROOT} -L${TARGET_SYSROOT}/lib -L${TARGET_SYSROOT}/usr/lib"
         export CMAKE_SYSROOT="${TARGET_SYSROOT}"
         export CMAKE_FIND_ROOT_PATH="${TARGET_SYSROOT}"
@@ -141,95 +81,13 @@ jobs:
         export OUTDIR=linux_arm64_clang
         export FLAGS="CROSS_COMPILE=aarch64-linux-gnu-"
         export CFLAGS_ADDITIONAL="-march=armv8-a -Wno-error -Wno-unused-command-line-argument"
-        # 对于 CMake 子项目，CC 和 CXX 环境变量应由 shim 脚本覆盖。
-        # LDFLAGS 和 CFLAGS_ADDITIONAL 也可能被传递给 CMake。
-        # CMAKE_SYSROOT 等变量会直接影响 CMake 的行为。
-
+        
         ./build_linux.sh
-    - name: Build (macOS)
-      if: ${{ startsWith(matrix.os, 'macos-') }} # 适用于所有 macOS 版本
-      run: |
-        # arm64-apple-darwin-clang shims for macOS ARM64 native builds if needed, or for cross-compiling
-        # This part might need adjustment based on whether it's a native ARM64 runner or cross-compilation
-        # Assuming native ARM64 runner for macos-13 if it's an M1/M2 based runner
-        # If cross-compiling on x86_64 runner for arm64 macos, specific SDKs might be needed.
-        # The existing script seems to be for a universal/multi-arch build on macOS.
-        /usr/bin/printf '#!/bin/sh\nclang -arch arm64 -fno-stack-check "$@"\n' | sudo tee /usr/local/bin/arm64-apple-darwin-clang
-        /usr/bin/printf '#!/bin/sh\nclang++ -arch arm64 -fno-stack-check "$@"\n' | sudo tee /usr/local/bin/arm64-apple-darwin-clang++
-        sudo chmod 755 /usr/local/bin/arm64-apple-darwin-clang /usr/local/bin/arm64-apple-darwin-clang++
-        sed -i -e 's/\&\& LZHAM_PLATFORM_PC/\&\& LZHAM_PLATFORM_PC \&\& !defined(__aarch64__)/' Codecs/lzham_codec_devel/lzhamdecomp/lzham_platform.h || true
 
-        ./build_macos.sh
-    - name: Build (Win64)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'win64' }}
-      shell: bash
-      run: |
-        sudo apt update
-        sudo apt install mingw-w64 -y
-
-        export CMPL=cmpl_gcc_x64
-        export OUTDIR=g_x64_win
-        export FLAGS="MSYSTEM=1 SystemDrive=1 RC=x86_64-w64-mingw32-windres CROSS_COMPILE=x86_64-w64-mingw32-"
-        export CFLAGS_ADDITIONAL=""
-        ./build_win.sh
-    - name: Build (Win32)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'win32' }}
-      shell: bash
-      run: |
-        sudo apt update
-        sudo apt install mingw-w64 -y
-
-        export CMPL=cmpl_gcc_x86
-        export OUTDIR=g_x86_win
-        export FLAGS="MSYSTEM=1 SystemDrive=1 RC=i686-w64-mingw32-windres CROSS_COMPILE=i686-w64-mingw32-"
-        export CFLAGS_ADDITIONAL=""
-        ./build_win.sh
-    - name: Upload (Linux/GCC-x64)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'gcc-x64' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: linux-x64
-        path: bin
-    - name: Upload (Linux/GCC-x86)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'gcc-x86' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: linux-x86
-        path: bin
-    - name: Upload (Linux/Clang)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'clang' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: linux-clang
-        path: bin
-    - name: Upload (Linux/android-aarch64)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'android-aarch64' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-aarch64
-        path: bin
-    # 新增：Upload (Linux/ARM64)
+    # 唯一的上传步骤：Linux ARM64 产物
     - name: Upload (Linux/ARM64)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'linux-arm64' }}
+      # if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'linux-arm64' }} # 如果不使用 matrix，此条件可以移除
       uses: actions/upload-artifact@v4
       with:
         name: linux-arm64
-        path: bin
-    - name: Upload (macOS)
-      if: ${{ startsWith(matrix.os, 'macos-') }} # 适用于所有 macOS 版本
-      uses: actions/upload-artifact@v4
-      with:
-        name: macos-${{ matrix.os }} # 可以加上 OS 版本以区分
-        path: bin
-    - name: Upload (Win64)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'win64' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: win64
-        path: bin
-    - name: Upload (Win32)
-      if: ${{ matrix.os == 'ubuntu-22.04' && matrix.mode == 'win32' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: win32
         path: bin
